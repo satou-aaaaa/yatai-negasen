@@ -44,7 +44,7 @@ const nameOf = (n) => G.PERS.find((x) => x.name === n).id;
       if (k.lv < 2 && h.some((x) => x.ms || x.ys)) why.push("うっかりはむずかしいだけ");
       if (!fitsQ(k.pid, h)) why.push("相手の手が性格の決まりとちがう");
       if (o.length !== n || new Set(o).size !== n || !o.includes(P.ans)) why.push(`選び肢が${n}つでない`);
-      if (o.filter((x) => fitsQ(nameOf(x), h)).length !== 1) why.push("記録に当てはまる選び肢が答えだけでない");
+      { const fit = o.filter((x) => fitsQ(nameOf(x), h)); if (fit.length !== 1 || fit[0] !== P.ans || nameOf(P.ans) !== k.pid) why.push("記録に当てはまる選び肢が答えだけでない"); } // 当てはまる1つが答えそのものか（yatai-negasen #1 の CodeRabbit）
       if (!P.src.length || P.src.some((x) => !Array.isArray(x) || !/^https:\/\/websites\.umich\.edu\/~axe\//.test(x[1]))) why.push("出典が無い");
       if (JSON.stringify(G.make(tag)) !== JSON.stringify(P) || JSON.stringify(G.replay(G.make(tag), mv)) !== JSON.stringify(h)) why.push("同じ種と手で同じにならない");
       if (why.length && !bad[k.id]) bad[k.id] = why.join("・") + "：" + tag + " " + mv.join("");
@@ -54,15 +54,20 @@ const nameOf = (n) => G.PERS.find((x) => x.name === n).id;
   check("問題：種類は24（性格8×難しさ3）", G.KINDS.length === 24 && [0, 1, 2].map((l) => G.kindsOf(l).length).join() === "8,8,8" && G.PERS.length === 8);
   // 2段目：うっかりなしで10日戦ったときの点を、ゲームとは別に数える（気まぐれ屋は平均）
   const way = { keep: () => "K", cut: () => "C", tft: (h) => (h.length ? h.at(-1).y : "K"), last: (h) => (h.length === 9 ? "C" : h.length ? h.at(-1).y : "K") };
-  const pts = (pid, g) => { if (pid === "rand") return g === "keep" ? 15 : g === "cut" ? 30 : -1; const h = []; let t = 0; for (let d = 0; d < 10; d++) { const m = way[g](h), y = RULE[pid](h); h.push({ m, y }); t += PAYQ[m + y]; } return t; };
-  const badG = G.PERS.filter((p) => { const sc = Object.keys(way).map((g) => pts(p.id, g)), mx = Math.max(...sc); return sc.filter((x) => x === mx).length !== 1 || Object.keys(way)[sc.indexOf(mx)] !== G.BY[p.id + "0"].grp; }).map((p) => p.id);
-  check("2段目の答えは、4つのやり方のうちいちばん点が多い1つ（同点なし）", badG.length === 0 && Object.keys(G.GROUPS).join() === "keep,cut,tft,last", badG.join());
+  // 気まぐれ屋は、ゲームと同じ動き（6日目からのずらしも入れる）で、同じ2000の種を4つのやり方それぞれで10日たどった平均で比べる（yatai-negasen #1 の CodeRabbit）
+  const run10 = (g, yOf) => { const h = []; let t = 0; for (let d = 0; d < 10; d++) { const m = way[g](h), y = yOf(h, d); h.push({ m, y }); t += PAYQ[m + y]; } return t; };
+  const randPts = (g) => { let t = 0; for (let s = 0; s < 2000; s++) { const P = G.make(`rand0|w${s}`), h = []; for (let d = 0; d < 10; d++) h.push(G.step(P, h, way[g](h))); t += h.reduce((a, x) => a + x.a, 0); } return t / 2000; };
+  const pts = (pid, g) => (pid === "rand" ? randPts(g) : run10(g, (h) => RULE[pid](h)));
+  const best = {};
+  const badG = G.PERS.filter((p) => { const sc = Object.keys(way).map((g) => pts(p.id, g)), mx = Math.max(...sc); best[p.id] = Object.keys(way)[sc.indexOf(mx)]; return sc.filter((x) => x === mx).length !== 1; }).map((p) => p.id);
+  const badK = G.KINDS.filter((k) => k.grp !== best[k.pid] || G.BY[k.id].grp !== best[k.pid]).map((k) => k.id); // やさしい・ふつう・むずかしいの3つとも
+  check("2段目の答えは、4つのやり方のうちいちばん点が多い1つ（同点なし・気まぐれ屋も4つを平均で比べる・24種類すべて）", badG.length === 0 && badK.length === 0 && Object.keys(G.GROUPS).join() === "keep,cut,tft,last", badG.concat(badK).join());
   check("2段目の答えは keep 以外の3つのうち2つ以上を使う（いつも同じ答えにしない）", new Set(G.KINDS.map((k) => k.grp)).size >= 2);
   const longWhy = [], longLook = [];
   for (const k of G.KINDS) { if ([...k.why].length > 100 || [...G.GRP_WHY[k.pid]].length > 100) longWhy.push(k.id); if ([...k.look].length > 45 || [...k.key].length > 60) longLook.push(k.id); }
   check("説明は100字以内・ヒントは45字・60字以内（やさしい日本語。一文を短く）", !longWhy.length && !longLook.length && G.SCENES.every((x) => [...x].length <= 60), longWhy.concat(longLook).join(","));
   check("気まぐれ屋は、どんな手の並びでも記録が決まった性格に当てはまらない（2万回）", (() => { for (let s = 0; s < 20000; s++) { const P = G.make(`rand${s % 3}|r${s}`), R = G.rng(s); const h = G.replay(P, Array.from({ length: 10 }, (_, d) => (s % 4 === 0 ? "K" : s % 4 === 1 ? "C" : R() < 0.5 ? "K" : "C"))); if (!fitsQ("rand", h)) return false; } return true; })());
-  { let n = 0; for (let s = 0; s < 20000; s++) { const P = G.make(`tft2|u${s}`); n += G.replay(P, Array(10).fill("K")).filter((x) => x.ms).length; } check("うっかりは5%ほど（2万回×10日）", Math.abs(n / 200000 - 0.05) < 0.005, n / 200000); }
+  { let n = 0, ny = 0; for (let s = 0; s < 20000; s++) { const P = G.make(`tft2|u${s}`), h = G.replay(P, Array(10).fill("K")); n += h.filter((x) => x.ms).length; ny += h.filter((x) => x.ys).length; } check("うっかりは、あなた・相手それぞれ5%ほど（2万回×10日）", Math.abs(n / 200000 - 0.05) < 0.005 && Math.abs(ny / 200000 - 0.05) < 0.005, [n / 200000, ny / 200000].join()); }
   const keys = new Set(); for (const k of G.KINDS) for (let s = 0; s < 400; s++) keys.add(G.keyOf(G.make(`${k.id}|n${s}`)));
   check("屋台の数：場面×種類で100通り以上（毎回の10日は遊ぶ人の手で変わる。game-dev.md F6）", keys.size >= 100, keys.size);
 }
@@ -183,7 +188,8 @@ try {
   check("10日のかけひき：そのまま・値下げのボタン（高さ56px以上）と、10日の記録・点の表が出る", await p.locator("#moves button").count() === 2 && (await p.$$eval("#moves button", (b) => b.map((x) => x.getBoundingClientRect().height))).every((h) => h >= 56) && await p.locator(".days i").count() === 20 && await p.locator(".pay").count() === 1);
   await fight(p);
   check("問題の画面：場面の問いと、押せる行3つか4つ（高さ56px以上）", await p.locator("#card").count() === 1 && (await p.$$eval(".ch", (b) => b.map((x) => x.getBoundingClientRect().height))).every((h) => h >= 56) && await p.locator(".ch").count() === await p.evaluate(() => __nm.cur().P.opts.length) && await p.locator(".ch").count() >= 3 && (await p.textContent("#card .sit")).length > 5);
-  check("押せる行には読み上げ用の名前がある", (await p.$$eval(".ch", (t) => t.filter((x) => !x.getAttribute("aria-label")).length)) === 0);
+  check("押せる行には読み上げ用の名前がある（性格の名前と決まりの両方）", (await p.$$eval(".ch", (t) => t.filter((x) => !/^.+：.+$/.test(x.getAttribute("aria-label") || "")).length)) === 0);
+  check("10日の記録は、読み上げで日ごとの手とうっかりがわかる（リスト）", (await p.$$eval("ol.vh li", (t) => t.map((x) => x.textContent))).length === 10 && /^1日目：あなた (そのまま|値下げ)・相手 (そのまま|値下げ)/.test(await p.textContent("ol.vh li")) && (await p.getAttribute(".days", "aria-hidden")) === "true");
   await p.click(`.ch[data-j="${await wrongIdx(p)}"]`);
   check("まちがえると ✕ の印と「ちがう」の文字（色だけで分けない）・知らせは role=status", await p.locator(".ch.ng").count() === 1 && (await p.evaluate(() => getComputedStyle(document.querySelector(".ch.ng"), "::after").content)).includes("ちがう") && /✕/.test(await p.textContent("#msg")) && await p.getAttribute("#msg", "role") === "status");
   // 開き直しても、まちがえた選び肢は残る
@@ -373,6 +379,16 @@ try {
     await b.click("#mv-K"); // 古いタブ b は1軒目の10日の途中のまま。押しても、a が当てた1軒目を二重に数えない
     await b.waitForTimeout(200);
     const s = await mem(a);
+    // 同じ日で止まった古いタブの手で、保存した手を上書きしない（yatai-negasen #1 の CodeRabbit）
+    {
+      const c = await ctx.newPage(); await c.goto(url); await c.waitForTimeout(150); await c.click("#go-d");
+      const d0 = await c.evaluate(() => __nm.cur().mv.slice());
+      const e = await ctx.newPage(); await e.goto(url); await e.waitForTimeout(150); await e.click("#go-d");
+      await c.click("#mv-K"); await e.click("#mv-C"); await e.waitForTimeout(150);
+      const sv = (await mem(c)).runs.d.cur.mv;
+      check("古いタブの手で、別のタブが進めた日を上書きしない", sv.length === d0.length + 1 && sv.at(-1) === "K" && (await e.evaluate(() => __nm.cur().mv.join(""))) === sv.join(""), JSON.stringify([d0, sv]));
+      await c.close(); await e.close();
+    }
     check("古いタブで同じ屋台を進めても二重に数えない", s.runs.d.res.length === 1 && Object.values(s.dex).reduce((x, y) => x + y) === 1);
     // ヒントの数は、別のタブで使った分も減らさない
     await a.click("#next"); await b.goto(url); await b.waitForTimeout(150); await b.click("#go-d");
